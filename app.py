@@ -9,7 +9,10 @@ CORS(app)
 
 swagger = Swagger(app)
 
+<<<<<<< HEAD
 # Database configuration for PostgreSQL
+=======
+>>>>>>> 66a81bcb84ff688a2c96b5d82c6cfb5aa6f15af9
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://klsyxpji:5B9bbUaUVCej0LLyTG2da_mSSlPQm4uK@stampy.db.elephantsql.com/klsyxpji'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
