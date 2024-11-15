@@ -7,11 +7,10 @@ from flasgger import Swagger
 app = Flask(__name__)
 CORS(app)
 
-# Initialize Swagger
 swagger = Swagger(app)
 
 # Database configuration for PostgreSQL
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:gozoro08@localhost/fooddb'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://klsyxpji:5B9bbUaUVCej0LLyTG2da_mSSlPQm4uK@stampy.db.elephantsql.com/klsyxpji'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
