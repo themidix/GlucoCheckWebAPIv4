@@ -1,3 +1,4 @@
+import logging
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
@@ -65,64 +66,123 @@ class NutritionalInformation(db.Model):
 with app.app_context():
     db.create_all()
 
-# Endpoint to save identified food items
+# # Endpoint to save identified food items
+# @app.route('/save-food-items', methods=['POST'])
+# def save_food_items():
+#     """
+#     Save food items and their nutritional information
+#     ---
+#     parameters:
+#       - name: foods
+#         in: body
+#         required: true
+#         type: array
+#         items:
+#           type: object
+#           properties:
+#             name:
+#               type: string
+#             volume:
+#               type: number
+#             type:
+#               type: string
+#             calories:
+#               type: number
+#             carbs:
+#               type: number
+#             fat:
+#               type: number
+#             protein:
+#               type: number
+#     responses:
+#       201:
+#         description: Food items saved successfully
+#       400:
+#         description: No data provided
+#       500:
+#         description: Error occurred
+#     """
+#     data = request.json
+#     if not data:
+#         return jsonify({"error": "No data provided"}), 400
+
+#     try:
+#         for food in data['foods']:
+#             # Check if the food type exists, if not, create it
+#             food_type = FoodType.query.filter_by(type=food['type']).first()
+#             if not food_type:
+#                 food_type = FoodType(type=food['type'])
+#                 db.session.add(food_type)
+#                 db.session.commit()
+
+#             # Create the food item
+#             new_food_item = FoodItem(
+#                 name=food['name'],
+#                 volume=food.get('volume', None),
+#                 food_type_id=food_type.id,
+#                 date_uploaded=datetime.utcnow()  # Set the upload time
+#             )
+#             db.session.add(new_food_item)
+#             db.session.commit()
+
+#             # Add nutritional information
+#             nutrition = NutritionalInformation(
+#                 food_item_id=new_food_item.id,
+#                 calories=food.get('calories', None),
+#                 carbs=food.get('carbs', None),
+#                 fat=food.get('fat', None),
+#                 protein=food.get('protein', None)
+#             )
+#             db.session.add(nutrition)
+
+#         db.session.commit()
+
+#         return jsonify({"message": "Food items saved successfully"}), 201
+
+#     except Exception as e:
+#         db.session.rollback()
+#         return jsonify({"error": str(e)}), 500
+
 @app.route('/save-food-items', methods=['POST'])
 def save_food_items():
-    """
-    Save food items and their nutritional information
-    ---
-    parameters:
-      - name: foods
-        in: body
-        required: true
-        type: array
-        items:
-          type: object
-          properties:
-            name:
-              type: string
-            volume:
-              type: number
-            type:
-              type: string
-            calories:
-              type: number
-            carbs:
-              type: number
-            fat:
-              type: number
-            protein:
-              type: number
-    responses:
-      201:
-        description: Food items saved successfully
-      400:
-        description: No data provided
-      500:
-        description: Error occurred
-    """
+    app.logger.debug('Received request data: %s', request.json)
+    
     data = request.json
     if not data:
+        app.logger.error('No data provided')
         return jsonify({"error": "No data provided"}), 400
-
+ 
     try:
+        if 'foods' not in data:
+            app.logger.error('Missing foods key in data')
+            return jsonify({"error": "Missing foods key in request"}), 400
+
         for food in data['foods']:
+            app.logger.debug('Processing food item: %s', food)
+            
+            # Validate required fields
+            if 'type' not in food or 'name' not in food:
+                app.logger.error('Missing required fields in food item: %s', food)
+                return jsonify({"error": f"Missing required fields in food item: {food}"}), 400
+
             # Check if the food type exists, if not, create it
             food_type = FoodType.query.filter_by(type=food['type']).first()
             if not food_type:
                 food_type = FoodType(type=food['type'])
                 db.session.add(food_type)
-                db.session.commit()
+                db.session.flush()  # Get the ID without committing
+                app.logger.debug('Created new food type: %s', food_type.type)
 
             # Create the food item
             new_food_item = FoodItem(
                 name=food['name'],
                 volume=food.get('volume', None),
                 food_type_id=food_type.id,
-                date_uploaded=datetime.utcnow()  # Set the upload time
+                date_uploaded=datetime.utcnow()
             )
             db.session.add(new_food_item)
-            db.session.commit()
+            db.session.flush()  # Get the ID without committing
+            app.logger.debug('Created new food item: %s', new_food_item.name)
 
             # Add nutritional information
             nutrition = NutritionalInformation(
@@ -133,13 +193,15 @@ def save_food_items():
                 protein=food.get('protein', None)
             )
             db.session.add(nutrition)
+            app.logger.debug('Added nutritional information for: %s', new_food_item.name)
 
         db.session.commit()
-
+        app.logger.info('Successfully saved all food items')
         return jsonify({"message": "Food items saved successfully"}), 201
-
+ 
     except Exception as e:
         db.session.rollback()
+        app.logger.error('Error saving food items: %s', str(e), exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 # Endpoint to get all food items
@@ -182,7 +244,7 @@ def get_food_items():
                 'volume': food.volume,
                 'food_type': food.food_type.type,
                 'timestamp': food.timestamp.isoformat(),
-                'date_uploaded': food.date_uploaded.isoformat()
+                'date_uploaded': food.date_uploaded
             }
             result.append(food_data)
         
@@ -253,6 +315,11 @@ def test():
     """
     return jsonify({"message": "Test route works!"})
 
-# Run the app
+@app.errorhandler(500)
+def handle_500_error(e):
+    app.logger.error('Internal Server Error: %s', str(e), exc_info=True)
+    return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.logger.setLevel(logging.DEBUG)
+    app.run(host='0.0.0.0', port=8080, debug=True)
