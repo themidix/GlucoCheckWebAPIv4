@@ -13,7 +13,7 @@ from openai import OpenAI
 from PIL import Image
 from flask import Flask, request, jsonify
 
-client = OpenAI(api_key="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")
+client = OpenAI(api_key="api_key")
 
 # Initialize Flask app
 app = Flask(__name__)
