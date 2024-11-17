@@ -15,6 +15,7 @@ from flask import Flask, request, jsonify
 
 client = OpenAI(api_key="api_key")
 
+
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)
@@ -114,7 +115,7 @@ class FoodItem(db.Model):
     name = db.Column(db.String(100), nullable=False)
     volume = db.Column(db.Float)
     food_type_id = db.Column(db.Integer, db.ForeignKey('food_type.id'), nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime, default=datetime.now)
     date_uploaded = db.Column(db.DateTime, default=datetime.utcnow)  
 
     food_type = db.relationship('FoodType', backref=db.backref('food_items', lazy=True))
@@ -300,6 +301,42 @@ def get_nutritional_info(food_item_id):
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/delete-all', methods=['DELETE'])
+def delete_all_data():
+    """
+    Delete all data from the database (FoodType, FoodItem, NutritionalInformation)
+    ---
+    responses:
+      200:
+        description: All data has been deleted successfully
+      500:
+        description: Error occurred while deleting data
+    """
+    try:
+        # Start by deleting nutritional information
+        db.session.query(NutritionalInformation).delete()
+
+        # Then delete food items
+        db.session.query(FoodItem).delete()
+
+        # Finally, delete food types
+        db.session.query(FoodType).delete()
+
+        # Commit the changes to the database
+        db.session.commit()
+
+        # Log the action
+        app.logger.info('All data deleted successfully')
+
+        return jsonify({"message": "All data has been deleted successfully"}), 200
+
+    except Exception as e:
+        # Rollback any changes if an error occurs
+        db.session.rollback()
+        app.logger.error('Error deleting all data: %s', str(e), exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
 
 # Test endpoint
 @app.route('/test', methods=['GET'])
