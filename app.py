@@ -6,10 +6,85 @@ from datetime import datetime
 from flask_cors import CORS
 from flasgger import Swagger
 
+import base64
+import requests
+import os
+from openai import OpenAI
+from PIL import Image
+from flask import Flask, request, jsonify
+
+client = OpenAI(api_key="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")
+
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)
 
+
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+@app.route('/analyze', methods=['POST'])
+def analyze_image():
+    try:
+        if 'image' not in request.files:
+            return jsonify({"error": "No image provided"}), 400
+        if not os.path.exists("uploads"):
+            os.makedirs("uploads")
+
+        # Save the uploaded image file
+        image_file = request.files['image']
+        image_path = os.path.join("uploads", image_file.filename)
+        image_file.save(image_path)
+
+        # Open and show the image
+        # img = Image.open(image_path)
+        # img.show()
+
+        # Encode the image in base64
+        encoded_image = encode_image(image_path)
+        og_prompt = "List the names and types of food in this image and provide their corresponding volume and nutritional information. Provide output in json format with a key 'foods' that holds the list of food objects, the fields are: name, type, volume (put unit in ml or gm beside it depending on context), count (set default value to '1'; if item is countable, show total number of items; else, if uncountable, like rice, keep default value), nutritional_info (including calories, carbs, fat and protein - mention the units). Mention each food type only once."
+
+        # Send the request to OpenAI API
+        response = client.chat.completions.create(
+        model="gpt-4o",
+        response_format={ "type": "json_object" },
+        temperature = 0, 
+        seed = 5,
+        messages=[
+            {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": og_prompt},
+                {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{encoded_image}",
+               },
+                },
+            ],
+            }
+        ],
+        #   max_tokens=20,
+        )
+
+        # # Return the response from OpenAI
+        # return jsonify(response.choices[0].message.content)
+                # Check if the response is null or empty
+        if response.choices and response.choices[0].message:
+            result = response.choices[0].message.content
+            if result is not None:
+                # print(response.choices[0].message.content)
+                return jsonify(response.choices[0].message.content)
+            else:
+                return("No content found in the response.")
+        else:
+            return("Unexpected response format. Please try again.")
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"error": "An error occurred on the server."}), 500
+    
 # Initialize Swagger
 swagger = Swagger(app)
 
@@ -40,7 +115,7 @@ class FoodItem(db.Model):
     volume = db.Column(db.Float)
     food_type_id = db.Column(db.Integer, db.ForeignKey('food_type.id'), nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    date_uploaded = db.Column(db.DateTime, default=datetime.utcnow)  # New column for date_uploaded
+    date_uploaded = db.Column(db.DateTime, default=datetime.utcnow)  
 
     food_type = db.relationship('FoodType', backref=db.backref('food_items', lazy=True))
 
@@ -65,83 +140,6 @@ class NutritionalInformation(db.Model):
 # Initialize the database
 with app.app_context():
     db.create_all()
-
-# # Endpoint to save identified food items
-# @app.route('/save-food-items', methods=['POST'])
-# def save_food_items():
-#     """
-#     Save food items and their nutritional information
-#     ---
-#     parameters:
-#       - name: foods
-#         in: body
-#         required: true
-#         type: array
-#         items:
-#           type: object
-#           properties:
-#             name:
-#               type: string
-#             volume:
-#               type: number
-#             type:
-#               type: string
-#             calories:
-#               type: number
-#             carbs:
-#               type: number
-#             fat:
-#               type: number
-#             protein:
-#               type: number
-#     responses:
-#       201:
-#         description: Food items saved successfully
-#       400:
-#         description: No data provided
-#       500:
-#         description: Error occurred
-#     """
-#     data = request.json
-#     if not data:
-#         return jsonify({"error": "No data provided"}), 400
-
-#     try:
-#         for food in data['foods']:
-#             # Check if the food type exists, if not, create it
-#             food_type = FoodType.query.filter_by(type=food['type']).first()
-#             if not food_type:
-#                 food_type = FoodType(type=food['type'])
-#                 db.session.add(food_type)
-#                 db.session.commit()
-
-#             # Create the food item
-#             new_food_item = FoodItem(
-#                 name=food['name'],
-#                 volume=food.get('volume', None),
-#                 food_type_id=food_type.id,
-#                 date_uploaded=datetime.utcnow()  # Set the upload time
-#             )
-#             db.session.add(new_food_item)
-#             db.session.commit()
-
-#             # Add nutritional information
-#             nutrition = NutritionalInformation(
-#                 food_item_id=new_food_item.id,
-#                 calories=food.get('calories', None),
-#                 carbs=food.get('carbs', None),
-#                 fat=food.get('fat', None),
-#                 protein=food.get('protein', None)
-#             )
-#             db.session.add(nutrition)
-
-#         db.session.commit()
-
-#         return jsonify({"message": "Food items saved successfully"}), 201
-
-#     except Exception as e:
-#         db.session.rollback()
-#         return jsonify({"error": str(e)}), 500
 
 @app.route('/save-food-items', methods=['POST'])
 def save_food_items():
@@ -178,7 +176,7 @@ def save_food_items():
                 name=food['name'],
                 volume=food.get('volume', None),
                 food_type_id=food_type.id,
-                date_uploaded=datetime.utcnow()
+                date_uploaded=food['date_uploaded'],
             )
             db.session.add(new_food_item)
             db.session.flush()  # Get the ID without committing
