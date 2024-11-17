@@ -1,22 +1,26 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
 from datetime import datetime
 from flask_cors import CORS
 from flasgger import Swagger
 
+# Initialize Flask app
 app = Flask(__name__)
 CORS(app)
 
+# Initialize Swagger
 swagger = Swagger(app)
 
-<<<<<<< HEAD
 # Database configuration for PostgreSQL
-=======
->>>>>>> 66a81bcb84ff688a2c96b5d82c6cfb5aa6f15af9
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://klsyxpji:5B9bbUaUVCej0LLyTG2da_mSSlPQm4uK@stampy.db.elephantsql.com/klsyxpji'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# Initialize SQLAlchemy
 db = SQLAlchemy(app)
+
+# Initialize Flask-Migrate
+migrate = Migrate(app, db)
 
 # FoodType Model
 class FoodType(db.Model):
@@ -35,6 +39,7 @@ class FoodItem(db.Model):
     volume = db.Column(db.Float)
     food_type_id = db.Column(db.Integer, db.ForeignKey('food_type.id'), nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    date_uploaded = db.Column(db.DateTime, default=datetime.utcnow)  # New column for date_uploaded
 
     food_type = db.relationship('FoodType', backref=db.backref('food_items', lazy=True))
 
@@ -56,7 +61,7 @@ class NutritionalInformation(db.Model):
     def __repr__(self):
         return f'<NutritionalInformation for FoodItem {self.food_item_id}>'
 
-# Initialize the database on app startup
+# Initialize the database
 with app.app_context():
     db.create_all()
 
@@ -113,7 +118,8 @@ def save_food_items():
             new_food_item = FoodItem(
                 name=food['name'],
                 volume=food.get('volume', None),
-                food_type_id=food_type.id
+                food_type_id=food_type.id,
+                date_uploaded=datetime.utcnow()  # Set the upload time
             )
             db.session.add(new_food_item)
             db.session.commit()
@@ -160,6 +166,8 @@ def get_food_items():
                 type: string
               timestamp:
                 type: string
+              date_uploaded:
+                type: string
       500:
         description: Error occurred
     """
@@ -173,7 +181,8 @@ def get_food_items():
                 'name': food.name,
                 'volume': food.volume,
                 'food_type': food.food_type.type,
-                'timestamp': food.timestamp.isoformat()
+                'timestamp': food.timestamp.isoformat(),
+                'date_uploaded': food.date_uploaded.isoformat()
             }
             result.append(food_data)
         
@@ -232,6 +241,7 @@ def get_nutritional_info(food_item_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# Test endpoint
 @app.route('/test', methods=['GET'])
 def test():
     """
