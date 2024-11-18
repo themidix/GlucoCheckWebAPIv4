@@ -311,12 +311,7 @@ def delete_food_item(current_user, food_item_id):
             return jsonify({"error": "Food item not found"}), 404
             
         NutritionalInformation.query.filter_by(food_item_id=food_item_id).delete()
-<<<<<<< HEAD
-        
-        # Delete the food item
-=======
 
->>>>>>> 40dc6f394acaf405c545ab358b61fac0fc855c86
         db.session.delete(food_item)
         db.session.commit()
         
