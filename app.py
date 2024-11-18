@@ -1,129 +1,49 @@
-import logging
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-from flask_migrate import Migrate
-from datetime import datetime
+from datetime import datetime, timedelta
+from flask_bcrypt import Bcrypt
+import jwt
+from functools import wraps
 from flask_cors import CORS
-from flasgger import Swagger
 
-import base64
-import requests
-import os
-from openai import OpenAI
-from PIL import Image
-from flask import Flask, request, jsonify
-
-client = OpenAI(api_key="api_key")
-
-
-# Initialize Flask app
 app = Flask(__name__)
 CORS(app)
 
+# Configuration
+class Config:
+    SQLALCHEMY_DATABASE_URI = 'postgresql://klsyxpji:5B9bbUaUVCej0LLyTG2da_mSSlPQm4uK@stampy.db.elephantsql.com/klsyxpji'
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    SECRET_KEY = 'your_secret_key_here'
+    JWT_REFRESH_SECRET_KEY = 'your_refresh_secret_key_here'
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=1)
+    JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=7)
 
-def encode_image(image_path):
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
+app.config.from_object(Config)
 
-@app.route('/analyze', methods=['POST'])
-def analyze_image():
-    try:
-        if 'image' not in request.files:
-            return jsonify({"error": "No image provided"}), 400
-        if not os.path.exists("uploads"):
-            os.makedirs("uploads")
-
-        # Save the uploaded image file
-        image_file = request.files['image']
-        image_path = os.path.join("uploads", image_file.filename)
-        image_file.save(image_path)
-
-        # Open and show the image
-        # img = Image.open(image_path)
-        # img.show()
-
-        # Encode the image in base64
-        encoded_image = encode_image(image_path)
-        og_prompt = "List the names and types of food in this image and provide their corresponding volume and nutritional information. Provide output in json format with a key 'foods' that holds the list of food objects, the fields are: name, type, volume (put unit in ml or gm beside it depending on context), count (set default value to '1'; if item is countable, show total number of items; else, if uncountable, like rice, keep default value), nutritional_info (including calories, carbs, fat and protein - mention the units). Mention each food type only once."
-
-        # Send the request to OpenAI API
-        response = client.chat.completions.create(
-        model="gpt-4o",
-        response_format={ "type": "json_object" },
-        temperature = 0, 
-        seed = 5,
-        messages=[
-            {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": og_prompt},
-                {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{encoded_image}",
-               },
-                },
-            ],
-            }
-        ],
-        #   max_tokens=20,
-        )
-
-        # # Return the response from OpenAI
-        # return jsonify(response.choices[0].message.content)
-                # Check if the response is null or empty
-        if response.choices and response.choices[0].message:
-            result = response.choices[0].message.content
-            if result is not None:
-                # print(response.choices[0].message.content)
-                return jsonify(response.choices[0].message.content)
-            else:
-                return("No content found in the response.")
-        else:
-            return("Unexpected response format. Please try again.")
-
-    except Exception as e:
-        print(f"Error: {e}")
-        return jsonify({"error": "An error occurred on the server."}), 500
-    
-# Initialize Swagger
-swagger = Swagger(app)
-
-# Database configuration for PostgreSQL
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://klsyxpji:5B9bbUaUVCej0LLyTG2da_mSSlPQm4uK@stampy.db.elephantsql.com/klsyxpji'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-# Initialize SQLAlchemy
+# Initialize extensions
 db = SQLAlchemy(app)
+bcrypt = Bcrypt(app)
 
-# Initialize Flask-Migrate
-migrate = Migrate(app, db)
+# Token blacklist set to store invalidated tokens
+token_blacklist = set()
 
-# FoodType Model
+# Models
 class FoodType(db.Model):
     __tablename__ = 'food_type'
     id = db.Column(db.Integer, primary_key=True)
     type = db.Column(db.String(50), nullable=False, unique=True)
 
-    def __repr__(self):
-        return f'<FoodType {self.type}>'
-
-# FoodItem Model
 class FoodItem(db.Model):
     __tablename__ = 'food_item'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     volume = db.Column(db.Float)
     food_type_id = db.Column(db.Integer, db.ForeignKey('food_type.id'), nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.now)
-    date_uploaded = db.Column(db.DateTime, default=datetime.utcnow)  
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    date_uploaded = db.Column(db.DateTime, default=datetime.utcnow)
 
     food_type = db.relationship('FoodType', backref=db.backref('food_items', lazy=True))
 
-    def __repr__(self):
-        return f'<FoodItem {self.name}>'
-
-# NutritionalInformation Model
 class NutritionalInformation(db.Model):
     __tablename__ = 'nutritional_information'
     id = db.Column(db.Integer, primary_key=True)
@@ -135,167 +55,210 @@ class NutritionalInformation(db.Model):
 
     food_item = db.relationship('FoodItem', backref=db.backref('nutrition', lazy=True))
 
-    def __repr__(self):
-        return f'<NutritionalInformation for FoodItem {self.food_item_id}>'
+class User(db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    first_name = db.Column(db.String(50), nullable=False)
+    last_name = db.Column(db.String(50), nullable=False)
+    email = db.Column(db.String(100), nullable=False, unique=True)
+    password = db.Column(db.String(255), nullable=False)
+    role = db.Column(db.String(50), default="GLUCOCHECK_USER")
 
-# Initialize the database
+# Initialize database
 with app.app_context():
     db.create_all()
 
-@app.route('/save-food-items', methods=['POST'])
-def save_food_items():
-    app.logger.debug('Received request data: %s', request.json)
-    
+# Authentication utilities
+def token_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        token = None
+        auth_header = request.headers.get('Authorization')
+
+        if auth_header:
+            try:
+                token = auth_header.split(" ")[1]
+            except IndexError:
+                return jsonify({'message': 'Invalid token format!'}), 403
+
+        if not token:
+            return jsonify({'message': 'Token is missing!'}), 403
+
+        if token in token_blacklist:
+            return jsonify({'message': 'Token has been revoked!'}), 401
+
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user = User.query.filter_by(id=data['id']).first()
+            if not current_user:
+                return jsonify({'message': 'User not found!'}), 404
+        except jwt.ExpiredSignatureError:
+            return jsonify({'message': 'Token has expired!'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'message': 'Invalid token!'}), 403
+
+        return f(current_user, *args, **kwargs)
+    return decorated_function
+
+def generate_tokens(user):
+    access_token = jwt.encode({
+        'id': user.id,
+        'exp': datetime.utcnow() + app.config['JWT_ACCESS_TOKEN_EXPIRES']
+    }, app.config['SECRET_KEY'], algorithm="HS256")
+
+    refresh_token = jwt.encode({
+        'id': user.id,
+        'exp': datetime.utcnow() + app.config['JWT_REFRESH_TOKEN_EXPIRES']
+    }, app.config['JWT_REFRESH_SECRET_KEY'], algorithm="HS256")
+
+    return access_token, refresh_token
+
+# Routes
+@app.route('/register', methods=['POST'])
+def register():
     data = request.json
-    if not data:
-        app.logger.error('No data provided')
-        return jsonify({"error": "No data provided"}), 400
- 
+    required_fields = ['first_name', 'last_name', 'email', 'password']
+    
+    if not all(field in data for field in required_fields):
+        return jsonify({"error": "Missing required fields"}), 400
+
     try:
-        if 'foods' not in data:
-            app.logger.error('Missing foods key in data')
-            return jsonify({"error": "Missing foods key in request"}), 400
+        if User.query.filter_by(email=data['email']).first():
+            return jsonify({"error": "Email already in use"}), 400
 
+        hashed_password = bcrypt.generate_password_hash(data['password']).decode('utf-8')
+        new_user = User(
+            first_name=data['first_name'],
+            last_name=data['last_name'],
+            email=data['email'],
+            password=hashed_password
+        )
+
+        db.session.add(new_user)
+        db.session.commit()
+
+        return jsonify({"message": "User registered successfully"}), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.json
+    if not data or not data.get('email') or not data.get('password'):
+        return jsonify({"error": "Email and password are required"}), 400
+
+    try:
+        user = User.query.filter_by(email=data['email']).first()
+        if user and bcrypt.check_password_hash(user.password, data['password']):
+            access_token, refresh_token = generate_tokens(user)
+            return jsonify({
+                'message': 'Login successful',
+                'access_token': access_token,
+                'refresh_token': refresh_token,
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name
+                }
+            }), 200
+        return jsonify({'error': 'Invalid email or password'}), 401
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/logout', methods=['POST'])
+@token_required
+def logout(current_user):
+    token = request.headers.get('Authorization').split(" ")[1]
+    token_blacklist.add(token)
+    return jsonify({'message': 'Successfully logged out'}), 200
+
+@app.route('/refresh', methods=['POST'])
+def refresh():
+    data = request.json
+    if not data or not data.get('refresh_token'):
+        return jsonify({"error": "Refresh token is required"}), 400
+
+    try:
+        token = data['refresh_token']
+        if token in token_blacklist:
+            return jsonify({'message': 'Refresh token has been revoked!'}), 401
+
+        data = jwt.decode(token, app.config['JWT_REFRESH_SECRET_KEY'], algorithms=["HS256"])
+        user = User.query.filter_by(id=data['id']).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        access_token, _ = generate_tokens(user)
+        return jsonify({'access_token': access_token}), 200
+
+    except jwt.ExpiredSignatureError:
+        return jsonify({'error': 'Refresh token has expired'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'error': 'Invalid refresh token'}), 403
+
+@app.route('/save-food-items', methods=['POST'])
+@token_required
+def save_food_items(current_user):
+    data = request.json
+    if not data or 'foods' not in data:
+        return jsonify({"error": "No food data provided"}), 400
+
+    try:
         for food in data['foods']:
-            app.logger.debug('Processing food item: %s', food)
-            
-            # Validate required fields
-            if 'type' not in food or 'name' not in food:
-                app.logger.error('Missing required fields in food item: %s', food)
-                return jsonify({"error": f"Missing required fields in food item: {food}"}), 400
-
-            # Check if the food type exists, if not, create it
             food_type = FoodType.query.filter_by(type=food['type']).first()
             if not food_type:
                 food_type = FoodType(type=food['type'])
                 db.session.add(food_type)
-                db.session.flush()  # Get the ID without committing
-                app.logger.debug('Created new food type: %s', food_type.type)
+                db.session.flush()
 
-            # Create the food item
             new_food_item = FoodItem(
                 name=food['name'],
-                volume=food.get('volume', None),
+                volume=food.get('volume'),
                 food_type_id=food_type.id,
-                date_uploaded=food['date_uploaded'],
+                timestamp=datetime.utcnow(),
+                date_uploaded=datetime.utcnow()
             )
             db.session.add(new_food_item)
-            db.session.flush()  # Get the ID without committing
-            app.logger.debug('Created new food item: %s', new_food_item.name)
+            db.session.flush()
 
-            # Add nutritional information
             nutrition = NutritionalInformation(
                 food_item_id=new_food_item.id,
-                calories=food.get('calories', None),
-                carbs=food.get('carbs', None),
-                fat=food.get('fat', None),
-                protein=food.get('protein', None)
+                calories=food.get('calories'),
+                carbs=food.get('carbs'),
+                fat=food.get('fat'),
+                protein=food.get('protein')
             )
             db.session.add(nutrition)
-            app.logger.debug('Added nutritional information for: %s', new_food_item.name)
 
         db.session.commit()
-        app.logger.info('Successfully saved all food items')
         return jsonify({"message": "Food items saved successfully"}), 201
- 
+
     except Exception as e:
         db.session.rollback()
-        app.logger.error('Error saving food items: %s', str(e), exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-# Endpoint to get all food items
 @app.route('/get-food-items', methods=['GET'])
-def get_food_items():
-    """
-    Get all food items
-    ---
-    responses:
-      200:
-        description: A list of food items
-        schema:
-          type: array
-          items:
-            type: object
-            properties:
-              id:
-                type: integer
-              name:
-                type: string
-              volume:
-                type: number
-              food_type:
-                type: string
-              timestamp:
-                type: string
-              date_uploaded:
-                type: string
-      500:
-        description: Error occurred
-    """
+@token_required
+def get_food_items(current_user):
     try:
-        food_items = FoodItem.query.all()
-        result = []
-        
-        for food in food_items:
-            food_data = {
-                'id': food.id,
-                'name': food.name,
-                'volume': food.volume,
-                'food_type': food.food_type.type,
-                'timestamp': food.timestamp.isoformat(),
-                'date_uploaded': food.date_uploaded
+        food_items = FoodItem.query.order_by(FoodItem.timestamp.desc()).all()
+        result = [{
+            'id': food.id,
+            'name': food.name,
+            'volume': food.volume,
+            'food_type': food.food_type.type,
+            'timestamp': food.timestamp,
+            'date_uploaded': food.date_uploaded,
+            'nutrition': {
+                'calories': food.nutrition[0].calories if food.nutrition else None,
+                'carbs': food.nutrition[0].carbs if food.nutrition else None,
+                'fat': food.nutrition[0].fat if food.nutrition else None,
+                'protein': food.nutrition[0].protein if food.nutrition else None
             }
-            result.append(food_data)
-        
-        return jsonify(result), 200
-    
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# Endpoint to get nutritional information
-@app.route('/get-nutritional-info/<int:food_item_id>', methods=['GET'])
-def get_nutritional_info(food_item_id):
-    """
-    Get nutritional information for a specific food item
-    ---
-    parameters:
-      - name: food_item_id
-        in: path
-        type: integer
-        required: true
-    responses:
-      200:
-        description: Nutritional information for the specified food item
-        schema:
-          type: object
-          properties:
-            food_item_id:
-              type: integer
-            calories:
-              type: number
-            carbs:
-              type: number
-            fat:
-              type: number
-            protein:
-              type: number
-      404:
-        description: Food item not found
-      500:
-        description: Error occurred
-    """
-    try:
-        nutritional_info = NutritionalInformation.query.filter_by(food_item_id=food_item_id).first()
-        if not nutritional_info:
-            return jsonify({"error": "Nutritional information not found for this food item"}), 404
-
-        result = {
-            'food_item_id': nutritional_info.food_item_id,
-            'calories': nutritional_info.calories,
-            'carbs': nutritional_info.carbs,
-            'fat': nutritional_info.fat,
-            'protein': nutritional_info.protein
-        }
+        } for food in food_items]
 
         return jsonify(result), 200
 
@@ -336,25 +299,30 @@ def delete_all_data():
         db.session.rollback()
         app.logger.error('Error deleting all data: %s', str(e), exc_info=True)
         return jsonify({"error": str(e)}), 500
+    
+@app.route('/food-items/<int:food_item_id>', methods=['DELETE'])
+@token_required
+def delete_food_item(current_user, food_item_id):
+    try:
+        # First, check if the food item exists
+        food_item = FoodItem.query.get(food_item_id)
+        
+        if not food_item:
+            return jsonify({"error": "Food item not found"}), 404
+            
+        NutritionalInformation.query.filter_by(food_item_id=food_item_id).delete()
 
-
-# Test endpoint
-@app.route('/test', methods=['GET'])
-def test():
-    """
-    Test endpoint
-    ---
-    responses:
-      200:
-        description: Test route works!
-    """
-    return jsonify({"message": "Test route works!"})
-
-@app.errorhandler(500)
-def handle_500_error(e):
-    app.logger.error('Internal Server Error: %s', str(e), exc_info=True)
-    return jsonify({"error": str(e)}), 500
+        db.session.delete(food_item)
+        db.session.commit()
+        
+        return jsonify({
+            "message": "Food item deleted successfully",
+            "deleted_item_id": food_item_id
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.logger.setLevel(logging.DEBUG)
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    app.run(debug=True)
