@@ -1,26 +1,112 @@
-from flask import Blueprint, request, jsonify
+import base64
+from flask import Blueprint,redirect, url_for, session, request, jsonify
+from openai import OpenAI
 import app
 from models import User, FoodItem, FoodType, NutritionalInformation
 from datetime import datetime, timedelta
 from flask_bcrypt import Bcrypt
 import jwt
 from functools import wraps
-from app import db
+from app import db, oauth 
 from config import Config
 import re
 from flask_mail import Mail, Message
+from requests_oauthlib import OAuth2Session
+import os
+
 
 # Blueprints
 jwt_auth_blueprint = Blueprint('auth', __name__)
+google_auth_blueprint = Blueprint('google_oauth', __name__)
 food_item_blueprint = Blueprint('food-items', __name__)
 food_type_blueprint = Blueprint('food-type', __name__)
 nutritional_info_blueprint = Blueprint('nutritional-information', __name__)
+food_image_info_blueprint = Blueprint('image-information', __name__)
+
 bcrypt = Bcrypt()
 
 # Token blacklist
 token_blacklist = set()
 
 mail = Mail()
+
+client = OpenAI(api_key=Config.API_KEY)
+
+# OAuth configuration
+google_auth_base_url = Config.GOOGLE_AUTH_BASE_URL
+google_token_url = Config.GOOGLE_TOKEN_URL
+google_user_info_url = Config.GOOGLE_USER_INFO_URL
+
+def get_google_oauth_session(state=None, token=None):
+    """Create an OAuth2 session with Google."""
+    return OAuth2Session(
+        client_id=Config.GOOGLE_CLIENT_ID,
+        redirect_uri=url_for('google_oauth.google_authorized', _external=True),
+        scope=['email', 'profile'],
+        state=state,
+        token=token
+    )
+
+@google_auth_blueprint.route('/google/login')
+def google_login():
+    """Initiate Google OAuth login."""
+    google = get_google_oauth_session()
+    authorization_url, state = google.authorization_url(google_auth_base_url, access_type="offline", prompt="consent")
+    session['oauth_state'] = state
+    return redirect(authorization_url)
+
+@google_auth_blueprint.route('/google/authorized')
+def google_authorized():
+    """Handle callback from Google OAuth."""
+    google = get_google_oauth_session(state=session.get('oauth_state'))
+    try:
+        token = google.fetch_token(
+            google_token_url,
+            client_secret=Config.GOOGLE_CLIENT_SECRET,
+            authorization_response=request.url
+        )
+    except Exception as e:
+        return jsonify({"error": "Google login failed", "details": str(e)}), 400
+
+    # Save token in session
+    session['google_token'] = token
+
+    # Fetch user info
+    google = get_google_oauth_session(token=token)
+    user_info = google.get(google_user_info_url).json()
+    email = user_info.get('email')
+    first_name = user_info.get('given_name', '')
+    last_name = user_info.get('family_name', '')
+
+    if not email:
+        return jsonify({"error": "Failed to retrieve user email."}), 400
+
+    # Check if user exists, else register them
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        user = User(first_name=first_name, last_name=last_name, email=email, password=None)
+        db.session.add(user)
+        db.session.commit()
+
+    # Generate tokens
+    access_token, refresh_token = generate_tokens(user)
+    return jsonify({
+        'message': 'Login successful',
+        'access_token': access_token,
+        'refresh_token': refresh_token,
+        'user': {
+            'id': user.id,
+            'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name
+        }
+    }), 200
+
+@google_auth_blueprint.route('/google/logout')
+def google_logout():
+    """Logout Google user."""
+    session.pop('google_token', None)
+    return jsonify({"message": "Google user logged out successfully."}), 200
 
 def token_required(f):
     @wraps(f)
@@ -203,7 +289,8 @@ def forgot_password():
         'exp': datetime.utcnow() + Config.RESET_PASSWORD_TOKEN_EXPIRES
     }, Config.SECRET_KEY, algorithm="HS256")
 
-    reset_link = f"http://localhost:5000/reset-password/{reset_token}"
+    base_url = os.getenv("BASE_URL")
+    reset_link = f"{Config.BASE_URL}/reset-password/{reset_token}"
     msg = Message(
         "Password Reset Request",
         sender="your_email@example.com",
@@ -254,7 +341,7 @@ def reset_password_from_profile(current_user):
 
     return jsonify({"message": "Password updated successfully"}), 200
 
-@food_item_blueprint.route('/save-food-items', methods=['POST'])
+@food_item_blueprint.route('/food-items', methods=['POST'])
 @token_required
 def save_food_items(current_user):
     data = request.json
@@ -275,7 +362,7 @@ def save_food_items(current_user):
                 food_type_id=food_type.id,
                 timestamp=datetime.utcnow(),
                 date_uploaded=datetime.utcnow(),
-                user_id=current_user.id  # Associate the food item with the current user
+                user_id=current_user.id
             )
             db.session.add(new_food_item)
             db.session.flush()
@@ -296,7 +383,7 @@ def save_food_items(current_user):
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
 
-@food_item_blueprint.route('/get-food-items', methods=['GET'])
+@food_item_blueprint.route('/food-items', methods=['GET'])
 @token_required
 def get_food_items(current_user):
     try:
@@ -321,7 +408,7 @@ def get_food_items(current_user):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@food_item_blueprint.route('/delete-all', methods=['DELETE'])
+@food_item_blueprint.route('/food-items', methods=['DELETE'])
 def delete_all_data():
     """
     Delete all data from the database (FoodType, FoodItem, NutritionalInformation)
@@ -379,3 +466,69 @@ def delete_food_item(current_user, food_item_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+    
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+@food_image_info_blueprint.route('/analyze', methods=['POST'])
+@token_required
+def analyze_image():
+    try:
+        if 'image' not in request.files:
+            return jsonify({"error": "No image provided"}), 400
+        if not os.path.exists("uploads"):
+            os.makedirs("uploads")
+
+        # Save the uploaded image file
+        image_file = request.files['image']
+        image_path = os.path.join("uploads", image_file.filename)
+        image_file.save(image_path)
+
+        # Open and show the image
+        # img = Image.open(image_path)
+        # img.show()
+
+        # Encode the image in base64
+        encoded_image = encode_image(image_path)
+        og_prompt = "List the names and types of food in this image and provide their corresponding volume and nutritional information. Provide output in json format with a key 'foods' that holds the list of food objects, the fields are: name, type, volume (put unit in ml or gm beside it depending on context), count (set default value to '1'; if item is countable, show total number of items; else, if uncountable, like rice, keep default value), nutritional_info (including calories, carbs, fat and protein - mention the units). Mention each food type only once."
+
+        # Send the request to OpenAI API
+        response = client.chat.completions.create(
+        model="gpt-4o",
+        response_format={ "type": "json_object" },
+        temperature = 0, 
+        seed = 5,
+        messages=[
+            {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": og_prompt},
+                {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{encoded_image}",
+               },
+                },
+            ],
+            }
+        ],
+        #   max_tokens=20,
+        )
+
+        # # Return the response from OpenAI
+        # return jsonify(response.choices[0].message.content)
+                # Check if the response is null or empty
+        if response.choices and response.choices[0].message:
+            result = response.choices[0].message.content
+            if result is not None:
+                # print(response.choices[0].message.content)
+                return jsonify(response.choices[0].message.content)
+            else:
+                return("No content found in the response.")
+        else:
+            return("Unexpected response format. Please try again.")
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"error": "An error occurred on the server."}), 500
