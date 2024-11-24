@@ -5,5 +5,12 @@ Flask-Bcrypt
 Flask-CORS
 flasgger
 psycopg2-binary
-
-
+requests
+oauthlib
+pyOpenSSL
+python-dotenv
+regex
+Flask-Mail
+openai
+pillow
+flask-migrate

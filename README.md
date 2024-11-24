@@ -1,21 +1,25 @@
-# GlucoCheck API
+# GlucoCheck API 🏥
 
-A Flask-based REST API for managing food items and nutritional information with user authentication.
+A Flask-based REST API for managing food items and nutritional information with user authentication and AI-powered image analysis.
 
 ## 🚀 Features
 
-- User authentication with JWT tokens
+- User authentication with JWT tokens and Google OAuth
 - Food items management (CRUD operations)
 - Nutritional information tracking
+- AI-powered food image analysis
+- Email services for password reset
 - Token-based authorization
 - PostgreSQL database integration
 - CORS support
 
 ## 📋 Prerequisites
 
-- Python 3.7+
+- Python 3.8+
 - PostgreSQL
-- pip (Python package manager)
+- Google OAuth Credentials
+- OpenAI API Key
+- SMTP Server (for email services)
 
 ## 🛠️ Installation
 
@@ -39,19 +43,55 @@ pip install -r requirements.txt
 4. Set up environment variables:
 Create a `.env` file in the root directory and add:
 ```env
-SQLALCHEMY_DATABASE_URI=postgresql://username:password@host:port/database
+BASE_URL=http://localhost:5000
+
+# Database Configuration
+DATABASE_URI=postgresql://username:password@host:port/database
+
+# JWT Configuration
 SECRET_KEY=your_secret_key_here
-JWT_REFRESH_SECRET_KEY=your_refresh_secret_key_here
+REFRESH_SECRET_KEY=your_refresh_secret_key_here
+ACCESS_TOKEN_EXPIRES=3600
+REFRESH_TOKEN_EXPIRES=604800
+
+# Email Configuration
+MAIL_SERVER=smtp.gmail.com
+MAIL_PORT=587
+MAIL_USE_TLS=true
+MAIL_USERNAME=your_email@example.com
+MAIL_PASSWORD=your_email_password
+RESET_PASSWORD_TOKEN_EXPIRES=30
+
+# Google OAuth Configuration
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+GOOGLE_DISCOVERY_URL=https://accounts.google.com/.well-known/openid-configuration
+GOOGLE_AUTH_BASE_URL=https://accounts.google.com/o/oauth2/auth
+GOOGLE_TOKEN_URL=https://accounts.google.com/o/oauth2/token
+GOOGLE_USER_INFO_URL=https://www.googleapis.com/oauth2/v1/userinfo
+
+# OpenAI Configuration
+API_KEY=your_openai_api_key
 ```
 
 ## 📦 Dependencies
 
 - Flask
 - Flask-SQLAlchemy
+- Flask-JWT-Extended
 - Flask-Bcrypt
 - Flask-CORS
-- PyJWT
+- Flask-Mail
+- Flask-Migrate 
+- flasgger
 - psycopg2-binary
+- requests
+- oauthlib
+- pyOpenSSL
+- python-dotenv
+- regex
+- openai
+- pillow
 
 ## 🗄️ Database Structure
 
@@ -76,6 +116,7 @@ JWT_REFRESH_SECRET_KEY=your_refresh_secret_key_here
    - food_type_id (Foreign Key)
    - timestamp
    - date_uploaded
+   - user_id (Foreign Key)
 
 4. **nutritional_information**
    - id (Primary Key)
@@ -87,51 +128,29 @@ JWT_REFRESH_SECRET_KEY=your_refresh_secret_key_here
 
 ## 🔐 Authentication Endpoints
 
-### Register User
+### Standard Authentication
 ```http
-POST /register
-Content-Type: application/json
-
-{
-    "first_name": "John",
-    "last_name": "Doe",
-    "email": "john@example.com",
-    "password": "secure_password"
-}
+POST /auth-user/register           # Register new user
+POST /auth-user/login             # User login
+POST /auth-user/logout            # User logout
+POST /auth-user/refresh           # Refresh access token
+POST /auth-user/forgot-password   # Request password reset
+POST /auth-user/reset-password/<token>  # Reset password
+POST /auth-user/profile/reset-password  # Reset password from profile
 ```
 
-### Login
+### Google OAuth
 ```http
-POST /login
-Content-Type: application/json
-
-{
-    "email": "john@example.com",
-    "password": "secure_password"
-}
-```
-
-### Logout
-```http
-POST /logout
-Authorization: Bearer <access_token>
-```
-
-### Refresh Token
-```http
-POST /refresh
-Content-Type: application/json
-
-{
-    "refresh_token": "<refresh_token>"
-}
+GET /google-auth/google/login      # Initiate Google login
+GET /google-auth/google/authorized # Google OAuth callback
+GET /google-auth/google/logout     # Google logout
 ```
 
 ## 🍎 Food Management Endpoints
 
 ### Save Food Items
 ```http
-POST /save-food-items
+POST /food/food-items
 Authorization: Bearer <access_token>
 Content-Type: application/json
 
@@ -150,22 +169,16 @@ Content-Type: application/json
 }
 ```
 
-### Get Food Items
+### Other Food Endpoints
 ```http
-GET /get-food-items
-Authorization: Bearer <access_token>
+GET /food/food-items         # Get user's food items
+DELETE /food/food-items      # Delete all food data
+DELETE /food/food-items/<id> # Delete specific food item
 ```
 
-### Delete Food Item
+### Image Analysis
 ```http
-DELETE /food-items/<food_item_id>
-Authorization: Bearer <access_token>
-```
-
-### Delete All Data
-```http
-DELETE /delete-all
-Authorization: Bearer <access_token>
+POST /image-information/analyze    # Analyze food image
 ```
 
 ## 🔒 Security Features
@@ -175,15 +188,25 @@ Authorization: Bearer <access_token>
 - Token blacklisting for logout
 - Access and refresh token system
 - Protected routes with token verification
+- OAuth 2.0 integration
+- Password complexity validation
+- Email verification
 
 ## 🏃 Running the Application
 
-1. Start the Flask server:
+1. Initialize the database:
 ```bash
-python app.py
+flask db init
+flask db migrate
+flask db upgrade
 ```
 
-2. The server will start on `http://localhost:5000`
+2. Start the Flask server:
+```bash
+python run.py
+```
+
+3. The server will start on `http://localhost:5000`
 
 ## 🧪 Testing
 
@@ -192,17 +215,7 @@ To run the tests:
 python -m pytest
 ```
 
-## 🛡️ Error Handling
-
-The API implements comprehensive error handling for:
-- Invalid credentials
-- Missing required fields
-- Database constraints
-- Token validation
-- Resource not found
-- Server errors
-
-## 📝 Response Formats
+## 📝 Response Format
 
 All responses follow the format:
 ```json
@@ -220,6 +233,8 @@ All responses follow the format:
 3. Implement rate limiting in production
 4. Regular token cleanup from blacklist
 5. Database backup strategy
+6. Secure handling of image uploads
+7. Monitor API usage limits
 
 ## 🤝 Contributing
 
