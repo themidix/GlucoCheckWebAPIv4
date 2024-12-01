@@ -203,6 +203,8 @@ flask db upgrade
 
 2. Start the Flask server:
 ```bash
+python run.py 
+or 
 flask run
 ```
 
