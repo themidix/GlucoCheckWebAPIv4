@@ -205,7 +205,7 @@ flask db upgrade
 ```bash
 python run.py 
 or 
-fask run
+flask run
 ```
 
 3. The server will start on `http://localhost:5000`
