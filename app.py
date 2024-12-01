@@ -24,7 +24,7 @@ def create_app():
     from routes import jwt_auth_blueprint, google_auth_blueprint, food_item_blueprint, food_type_blueprint, nutritional_info_blueprint, food_image_info_blueprint
     app.register_blueprint(jwt_auth_blueprint, url_prefix="/auth-user")
     app.register_blueprint(google_auth_blueprint, url_prefix="/google-auth")
-    app.register_blueprint(food_item_blueprint, url_prefix="/food")
+    app.register_blueprint(food_item_blueprint, url_prefix="/food-items")
     app.register_blueprint(food_type_blueprint, url_prefix="/food-type")
     app.register_blueprint(nutritional_info_blueprint, url_prefix="/nutritional-information")
     app.register_blueprint(food_image_info_blueprint, url_prefix="/image-information")

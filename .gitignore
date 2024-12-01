@@ -1,0 +1,51 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+foodenv/
+env/
+venv/
+
+# Environment variables
+.env
+
+# Gunicorn PID file
+*.pid
+
+# Flask instance folder (if used)
+instance/
+
+# Logs
+*.log
+*.out
+*.err
+logs/
+
+# SQLite database files (if used)
+*.sqlite3
+*.db
+
+# Compiled files and build artifacts
+*.egg-info/
+dist/
+build/
+
+# Cache files
+*.cache
+*.coverage
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE and editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+
+# Other sensitive files
+secrets.json

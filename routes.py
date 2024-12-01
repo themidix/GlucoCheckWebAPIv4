@@ -62,7 +62,7 @@ def google_authorized():
     try:
         token = google.fetch_token(
             google_token_url,
-            client_secret=Config.GOOGLE_CLIENT_SECRET,
+            client_secret = Config.GOOGLE_CLIENT_SECRET,
             authorization_response=request.url
         )
     except Exception as e:
