@@ -1,6 +1,7 @@
 #models.py
 from datetime import datetime
 from app import db
+from werkzeug.security import generate_password_hash
 
 # Models
 class FoodType(db.Model):
@@ -21,6 +22,12 @@ class FoodItem(db.Model):
     food_type = db.relationship('FoodType', backref=db.backref('food_items', lazy=True))
     user = db.relationship('User', backref=db.backref('food_items', lazy=True))
 
+    __table_args__ = (
+        db.Index('idx_food_timestamp', 'timestamp'),
+        db.Index('idx_food_user_id', 'user_id'),
+        db.Index('idx_food_type_id', 'food_type_id')
+    )
+
 class NutritionalInformation(db.Model):
     __tablename__ = 'nutritional_information'
     id = db.Column(db.Integer, primary_key=True)
@@ -40,4 +47,21 @@ class User(db.Model):
     email = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
     role = db.Column(db.String(50), default="GLUCOCHECK_USER")
+    is_admin = db.Column(db.Boolean, default=False)
+    
+    # Add helper methods for role checking
+    def is_super_user(self):
+        return self.role == "GLUCOCHECK_ADMIN" and self.is_admin
+    
+    @staticmethod
+    def create_admin_user(email, password, first_name, last_name):
+        admin = User(
+            email=email,
+            password=password,  # Make sure to hash this password
+            first_name=first_name,
+            last_name=last_name,
+            role="GLUCOCHECK_ADMIN",
+            is_admin=True
+        )
+        return admin
 

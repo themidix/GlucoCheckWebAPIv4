@@ -170,35 +170,60 @@ def is_valid_password(password):
     password_regex = r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,}$'
     return re.match(password_regex, password)
 
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        token = request.headers.get('Authorization', '').split(" ")[1] if request.headers.get('Authorization') else None
+        
+        if not token:
+            return jsonify({'message': 'Token is missing!'}), 403
+
+        try:
+            data = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+            current_user = User.query.get(data['id'])
+            if not current_user or not current_user.is_super_user():
+                return jsonify({'message': 'Admin privileges required!'}), 403
+        except:
+            return jsonify({'message': 'Invalid token!'}), 403
+
+        return f(current_user, *args, **kwargs)
+    return decorated_function
+
 @jwt_auth_blueprint.route('/register', methods=['POST'])
 def register():
     data = request.json
     if not data or not all(field in data for field in ['first_name', 'last_name', 'email', 'password']):
         return jsonify({"error": "Missing required fields"}), 400
 
-    # Validate email
-    if not is_valid_email(data['email']):
-        return jsonify({"error": "Invalid email format"}), 400
-
-    # Validate password
-    if not is_valid_password(data['password']):
-        return jsonify({
-            "error": "Password must be at least 8 characters long, include an uppercase letter, a lowercase letter, a number, and a special character"
-        }), 400
-
     try:
-        # Check for existing user before creating
         existing_user = User.query.filter_by(email=data['email']).first()
         if existing_user:
             return jsonify({"error": "Email already in use"}), 400
 
+        # Check if this is an admin registration (requires existing admin token)
+        is_admin_registration = data.get('is_admin', False)
+        if is_admin_registration:
+            # Verify admin token in headers
+            admin_token = request.headers.get('Authorization')
+            if not admin_token or not verify_admin_token(admin_token):
+                return jsonify({"error": "Unauthorized admin registration"}), 403
+
         hashed_password = bcrypt.generate_password_hash(data['password']).decode('utf-8')
-        new_user = User(
-            first_name=data['first_name'],
-            last_name=data['last_name'],
-            email=data['email'],
-            password=hashed_password
-        )
+        
+        if is_admin_registration:
+            new_user = User.create_admin_user(
+                email=data['email'],
+                password=hashed_password,
+                first_name=data['first_name'],
+                last_name=data['last_name']
+            )
+        else:
+            new_user = User(
+                first_name=data['first_name'],
+                last_name=data['last_name'],
+                email=data['email'],
+                password=hashed_password
+            )
         
         db.session.add(new_user)
         db.session.commit()
@@ -210,38 +235,50 @@ def register():
 
     except Exception as e:
         db.session.rollback()
-        # Log the specific error for debugging
         print(f"Registration error: {str(e)}")
         return jsonify({"error": "Registration failed", "details": str(e)}), 500
 
 @jwt_auth_blueprint.route('/login', methods=['POST'])
 def login():
-    data = request.json
-    if not data or not data.get('email') or not data.get('password'):
-        return jsonify({"error": "Email and password are required"}), 400
-
-    # Validate email
-    if not is_valid_email(data['email']):
-        return jsonify({"error": "Invalid email format"}), 400
-
     try:
-        user = User.query.filter_by(email=data['email']).first()
-        if user and bcrypt.check_password_hash(user.password, data['password']):
-            access_token, refresh_token = generate_tokens(user)
-            return jsonify({
-                'message': 'Login successful',
-                'access_token': access_token,
-                'refresh_token': refresh_token,
-                'user': {
-                    'id': user.id,
-                    'email': user.email,
-                    'first_name': user.first_name,
-                    'last_name': user.last_name
-                }
-            }), 200
-        return jsonify({'error': 'Invalid email or password'}), 401
+        data = request.json or {}
+        email = data.get('email')
+        password = data.get('password')
+        
+        if not email or not password:
+            return jsonify({"error": "Email and password are required"}), 400
+
+        user = User.query.filter(User.email.ilike(email)).first()
+        print(f"User found: {user}")  # Debug
+
+        if not user:
+            return jsonify({"error": "Invalid email or password"}), 401
+
+        print(f"Stored password hash: {user.password}")  # Debug
+        if not bcrypt.check_password_hash(user.password, password):
+            return jsonify({"error": "Invalid email or password"}), 401
+
+        token = jwt.encode({
+            'id': user.id,
+            'email': user.email,
+            'role': user.role,
+            'is_admin': user.is_admin,
+            'exp': datetime.utcnow() + timedelta(hours=24)
+        }, Config.SECRET_KEY, algorithm="HS256")
+
+        return jsonify({
+            "token": token,
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "role": user.role,
+                "is_admin": user.is_admin
+            }
+        }), 200
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Login error: {str(e)}")  # Debug
+        return jsonify({"error": "Login failed", "details": str(e)}), 500
 
 @jwt_auth_blueprint.route('/logout', methods=['POST'])
 @token_required
@@ -532,3 +569,181 @@ def analyze_image():
     except Exception as e:
         print(f"Error: {e}")
         return jsonify({"error": "An error occurred on the server."}), 500
+
+@jwt_auth_blueprint.route('/admin/users', methods=['GET'])
+@admin_required
+def get_all_users(current_user):
+    try:
+        users = User.query.all()
+        users_list = [{
+            'id': user.id,
+            'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'role': user.role,
+            'is_admin': user.is_admin
+        } for user in users]
+        return jsonify({'users': users_list}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@jwt_auth_blueprint.route('/admin/users/<int:user_id>/food-items', methods=['GET'])
+@admin_required
+def get_user_food_items(current_user, user_id):
+    try:
+        food_items = FoodItem.query.filter_by(user_id=user_id).all()
+        result = [{
+            'id': food.id,
+            'name': food.name,
+            'volume': food.volume,
+            'food_type': food.food_type.type,
+            'timestamp': food.timestamp,
+            'date_uploaded': food.date_uploaded,
+            'nutrition': {
+                'calories': food.nutrition[0].calories if food.nutrition else None,
+                'carbs': food.nutrition[0].carbs if food.nutrition else None,
+                'fat': food.nutrition[0].fat if food.nutrition else None,
+                'protein': food.nutrition[0].protein if food.nutrition else None
+            }
+        } for food in food_items]
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@jwt_auth_blueprint.route('/admin/make-admin/<int:user_id>', methods=['POST'])
+@admin_required
+def make_admin(current_user, user_id):
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        user.role = "GLUCOCHECK_ADMIN"
+        user.is_admin = True
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'User successfully promoted to admin',
+            'user_id': user_id
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+def verify_admin_token(token):
+    try:
+        if not token.startswith('Bearer '):
+            return False
+        token = token.split(' ')[1]
+        data = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+        current_user = User.query.get(data['id'])
+        return current_user and current_user.is_super_user()
+    except:
+        return False
+
+@jwt_auth_blueprint.route('/setup-admin', methods=['POST'])
+def setup_initial_admin():
+    try:
+        # Check if admin already exists
+        if User.query.filter_by(role="GLUCOCHECK_ADMIN").first():
+            return jsonify({"error": "Admin already exists"}), 400
+
+        # Validate request data
+        data = request.json or {}
+        required_fields = ['email', 'password', 'first_name', 'last_name']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify({"error": f"Missing required fields: {', '.join(missing_fields)}"}), 400
+
+        # Hash password
+        hashed_password = bcrypt.generate_password_hash(data['password']).decode('utf-8')
+
+        # Create admin user
+        admin = User.create_admin_user(
+            email=data['email'],
+            password=hashed_password,
+            first_name=data['first_name'],
+            last_name=data['last_name']
+        )
+        db.session.add(admin)
+        db.session.commit()
+
+        return jsonify({
+            "message": "Admin created successfully",
+            "admin_id": admin.id,
+            "email": admin.email
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": "An error occurred while setting up admin", "details": str(e)}), 500
+
+@jwt_auth_blueprint.route('/admin/all-food-items', methods=['GET'])
+@admin_required
+def get_all_users_food_items(current_user):
+    try:
+        # Get pagination parameters
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int)
+        
+        # Get filter parameters
+        user_id = request.args.get('user_id', type=int)
+        food_type = request.args.get('food_type')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+
+        # Base query
+        query = FoodItem.query\
+            .join(User)\
+            .join(FoodType)\
+            .outerjoin(NutritionalInformation)\
+            .options(
+                db.joinedload(FoodItem.user),
+                db.joinedload(FoodItem.food_type),
+                db.joinedload(FoodItem.nutrition)
+            )
+
+        # Apply filters
+        if user_id:
+            query = query.filter(FoodItem.user_id == user_id)
+        if food_type:
+            query = query.filter(FoodType.type == food_type)
+        if date_from:
+            query = query.filter(FoodItem.timestamp >= date_from)
+        if date_to:
+            query = query.filter(FoodItem.timestamp <= date_to)
+
+        # Execute paginated query
+        paginated_items = query.order_by(FoodItem.timestamp.desc())\
+            .paginate(page=page, per_page=per_page, error_out=False)
+
+        result = [{
+            'food_id': food.id,
+            'name': food.name,
+            'volume': food.volume,
+            'timestamp': food.timestamp,
+            'user': {
+                'id': food.user.id,
+                'email': food.user.email,
+                'name': f"{food.user.first_name} {food.user.last_name}"
+            },
+            'food_type': food.food_type.type,
+            'nutrition': {
+                'calories': food.nutrition[0].calories if food.nutrition else None,
+                'carbs': food.nutrition[0].carbs if food.nutrition else None,
+                'fat': food.nutrition[0].fat if food.nutrition else None,
+                'protein': food.nutrition[0].protein if food.nutrition else None
+            }
+        } for food in paginated_items.items]
+
+        return jsonify({
+            'total_items': paginated_items.total,
+            'current_page': page,
+            'total_pages': paginated_items.pages,
+            'has_next': paginated_items.has_next,
+            'has_prev': paginated_items.has_prev,
+            'food_items': result
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
